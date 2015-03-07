@@ -7,12 +7,12 @@ function Consume($a_SoapOptions)
     /**
      * Create the service.
      */
-    $o_Service = new SforceService(Null, $a_SoapOptions);
+    $o_Service = new SforceService(null, $a_SoapOptions);
 
     /**
      * Create the parameters - starting with just the instances.
      */
-    $o_Params           = new SforceService_login;
+    $o_Params = new SforceService_login;
 
     /**
      * Populate the parameter instances with the appropriate data.
@@ -23,21 +23,20 @@ function Consume($a_SoapOptions)
     /**
      * Get the response.
      */
-    $o_SoapFault = Null;
-    $o_Exception = Null;
-    $o_Response  = Null;
-    try{
-	    $o_Response = $o_Service->login($o_Params);
+    $o_SoapFault = null;
+    $o_Exception = null;
+    $o_Response  = null;
+    try {
+        $o_Response = $o_Service->login($o_Params);
+    }
+    catch (SoapFault $o_SoapFault) {
+    }
+    catch (Exception $o_Exception) {
     }
 
     /**
-     * Catch any exceptions and pass them back to the caller.
+     * Return the service, the response and any exceptions.
      */
-    catch(SoapFault $o_SoapFault){}
-    catch(Exception $o_Exception){}
- 
- 	/**
- 	 * Return the service, the response and any exceptions.
- 	 */
+
     return array($o_Service, $o_Response, $o_SoapFault, $o_Exception);
 }
