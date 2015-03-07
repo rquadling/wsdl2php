@@ -9,8 +9,7 @@ Currently, this is a very simply project.
 
 There are 2 scripts.
 
-``wsdl2php <wsdl>``
-``allWSDL2PHP``
+``wsdl2php <wsdl>`` and ``allWSDL2PHP``
 
 The first script takes a single parameter to convert a wsdl file or URL into a set of PHP classes.
 
