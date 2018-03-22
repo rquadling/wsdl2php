@@ -2,3 +2,5 @@ PostcodeAnywhere    http://services.postcodeanywhere.co.uk/CleansePlus/Interacti
 QuickTellerService  https://stageserv.interswitchng.com/uat_quicktellerservice/QuickTeller.svc?wsdl
 ServiceTicketAPI    https://test.connectwise.com/v4_6_release/apis/1.5/ServiceTicketApi.asmx?wsdl
 W2IndigoServices    https://api.w2globaldata.com/W2IndigoServices.svc?singleWsdl
+SpaService          http://support.hotelperfect.co.uk:8088/hello?singleWsdl
+GDXMLWebService     http://81.144.162.66:5731/GDXMLWebServiceTEST/GDXMLWebService.asmx?WSDL

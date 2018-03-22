@@ -27,14 +27,14 @@ if ($_SERVER['argc'] != 2) {
     die("usage: wsdl2php <wsdl-file>\n");
 }
 
-$s_WSDL = $_SERVER['argv'][1];
+$wsdl = $_SERVER['argv'][1];
 
-echo 'Analyzing WSDL of ', $s_WSDL, PHP_EOL;
+echo 'Analyzing WSDL of ', $wsdl, PHP_EOL;
 $s_Processed = date('r');
 
 try {
     $client = new SoapClient(
-        $s_WSDL, [
+        $wsdl, [
             'encoding' => 'UTF-8',
             'exception' => true,
             'trace' => true,
@@ -84,8 +84,8 @@ try {
 echo 'Loaded WSDL', PHP_EOL;
 
 $dom = new DOMDocument();
-$dom->load($s_WSDL);
-$o_XPath = new DOMXPath($dom);
+$dom->load($wsdl);
+$xPath = new DOMXPath($dom);
 echo 'Built DOM and XPath', PHP_EOL;
 
 // get documentation
@@ -111,12 +111,12 @@ foreach ($nodes as $node) {
 echo 'Define Service', PHP_EOL;
 $service = [
     'class' => $dom->getElementsByTagNameNS('*', 'service')->item(0)->getAttribute('name'),
-    'endpoint' => $o_XPath->query(
+    'endpoint' => $xPath->query(
         '//*[local-name()="definitions"]/*[local-name()="service"]/*[local-name()="port"]/*[local-name()="address"]/@location',
         null,
         true
     )->item(0)->nodeValue,
-    'wsdl' => $s_WSDL,
+    'wsdl' => $wsdl,
     'doc' => $doc['service'],
     'functions' => [],
     'namespace' => null,
@@ -252,7 +252,7 @@ foreach ($operations as $operation) {
         'faults' => [],
     ];
 
-    $a_XPaths['Headers'] = [
+    $xPathMaster['Headers'] = [
         'headers_in' => [
             'Definitions/Binding/Operation[method]/Input/Header' => '//*[local-name()="definitions"]/*[local-name()="binding"]/*[local-name()="operation"][@name="'.$call.'"]/*[local-name()="input"]/*[local-name()="header"]/@part',
         ],
@@ -264,13 +264,13 @@ foreach ($operations as $operation) {
         ],
     ];
 
-    foreach ($a_XPaths['Headers'] as $s_Type => $a_HeaderXPaths) {
-        foreach ($a_HeaderXPaths as $s_XPathType => $s_XPath) {
-            $o_Path = $o_XPath->query($s_XPath, null, true);
-            if ($o_Path->length > 0) {
-                foreach ($o_Path as $o_PathItem) {
-                    $function[$s_Type][] = $o_PathItem->nodeValue;
-                    $service[$s_Type][$o_PathItem->nodeValue][] = $call;
+    foreach ($xPathMaster['Headers'] as $headerType => $headerXPaths) {
+        foreach ($headerXPaths as $headerXPathType => $xPathRule) {
+            $domPath = $xPath->query($xPathRule, null, true);
+            if ($domPath->length > 0) {
+                foreach ($domPath as $domItem) {
+                    $function[$headerType][] = $domItem->nodeValue;
+                    $service[$headerType][$domItem->nodeValue][] = $call;
                 }
             }
         }
@@ -319,20 +319,22 @@ $primitive_types = [
     'ArrayOfInt',
     'ArrayOfFloat',
     'ArrayOfString',
-    'decimal',
     'hexBinary',
 ]; // TODO: dateTime is special, maybe use PEAR::Date or similar
-$a_Aliases = [];
-$a_ClassNameSubs = [
+$typeAliases = [
+    'boolean' => ['BaseType'=>'bool'],
+    'decimal' => ['BaseType'=>'float'],
+    'double' => ['BaseType'=>'float'],
+];
+$classNameSubstitutions = [
     'Map' => [],
     'Subs' => [],
 ];
-$a_Inheritence = [];
 $service['types'] = [];
 //print_r($types);exit;
 foreach ($types as $type) {
     $parts = explode("\n", $type);
-    list($s_BaseType, $class) = explode(' ', $parts[0]);
+    list($baseType, $class) = explode(' ', $parts[0]);
 
     if (substr($class, -2, 2) == '[]') { // array skipping
         continue;
@@ -342,7 +344,7 @@ foreach ($types as $type) {
         continue;
     }
 
-    echo " - {$s_BaseType} => {$class}", PHP_EOL;
+    echo " - {$baseType} => {$class}", PHP_EOL;
 
     /*
      * Due to the Mac being a case insensitive file system, we have this real pain to go through where the class =>
@@ -353,51 +355,51 @@ foreach ($types as $type) {
      * So, in the event of duplicate names, we need to generate new names for local versions and make sure they map
      * appropriately.
      */
-    $a_ClassNameSubs['Subs'][strtolower($class)][] = [
+    $classNameSubstitutions['Subs'][strtolower($class)][] = [
         'Original' => $class,
         'Renamed' => false,
     ];
 
-    $a_XPaths['Inheritence'] = [
+    $xPathMaster['Inheritence'] = [
         'Definition/Types/Schema/ComplexType[class]/complexContent/extension' => '//*[local-name()="definitions"]/*[local-name()="types"]/*[local-name()="schema"]/*[local-name()="complexType"][@name="'.$class.'"]/*[local-name()="complexContent"]/*[local-name()="extension"]',
     ];
-    $s_Inherits = '';
-    foreach ($a_XPaths['Inheritence'] as $s_PathType => $s_XPath) {
-        $o_Path = $o_XPath->query($s_XPath, null, true);
-        if ($o_Path->length > 0) {
-            $o_Base = $o_XPath->query('@base', $o_Path->item(0));
-            if ($o_Base->length > 0) {
-                $s_Inherits = stripNS($o_Base->item(0)->nodeValue);
+    $inherits = '';
+    foreach ($xPathMaster['Inheritence'] as $inheritenceType => $xPathRule) {
+        $domPath = $xPath->query($xPathRule, null, true);
+        if ($domPath->length > 0) {
+            $domBase = $xPath->query('@base', $domPath->item(0));
+            if ($domBase->length > 0) {
+                $inherits = stripNS($domBase->item(0)->nodeValue);
                 break;
             }
         }
     }
 
-    if (count($a_ClassNameSubs['Subs'][strtolower($class)]) > 1) {
-        foreach ($a_ClassNameSubs['Subs'][strtolower($class)] as $i_Sub => &$a_Sub) {
-            if (false === $a_Sub['Renamed']) {
-                $a_Sub['Renamed'] = $a_Sub['Original'].'Case'.(1 + $i_Sub);
-                $a_ClassNameSubs['Map'][$a_Sub['Original']] = $a_Sub['Renamed'];
-                echo ' *** Renamed ', $a_Sub['Original'], ' to ', $a_Sub['Renamed'], PHP_EOL;
-                if (isset($service['types'][$a_Sub['Original']])) {
-                    $service['types'][$a_Sub['Original']]['map'] .= 'Case'.(1 + $i_Sub);
-                    $service['types'][$a_Sub['Original']]['case'] = true;
+    if (count($classNameSubstitutions['Subs'][strtolower($class)]) > 1) {
+        foreach ($classNameSubstitutions['Subs'][strtolower($class)] as $subIndex => &$substitution) {
+            if (false === $substitution['Renamed']) {
+                $substitution['Renamed'] = $substitution['Original'].'Case'.(1 + $subIndex);
+                $classNameSubstitutions['Map'][$substitution['Original']] = $substitution['Renamed'];
+                echo ' *** Renamed ', $substitution['Original'], ' to ', $substitution['Renamed'], PHP_EOL;
+                if (isset($service['types'][$substitution['Original']])) {
+                    $service['types'][$substitution['Original']]['map'] .= 'Case'.(1 + $subIndex);
+                    $service['types'][$substitution['Original']]['case'] = true;
                 }
-                $s_ClassCase = 'Case'.(1 + $i_Sub);
-                $b_Case = true;
+                $classCase = 'Case'.(1 + $subIndex);
+                $cased = true;
             }
         }
     } else {
-        $s_ClassCase = '';
-        $b_Case = false;
+        $classCase = '';
+        $cased = false;
     }
 
     $members = [];
-    $b_Ignorable = true;
-    switch ($s_BaseType) {
+    $ignorable = true;
+    switch ($baseType) {
         case '<anyXML>':
         case 'struct':
-            $b_Ignorable = false;
+            $ignorable = false;
             for ($i = 1; $i < count($parts) - 1; ++$i) {
                 $parts[$i] = trim($parts[$i]);
                 list($type, $member) = explode(' ', substr($parts[$i], 0, strlen($parts[$i]) - 1));
@@ -405,46 +407,49 @@ foreach ($types as $type) {
                 $array = false;
                 $mandatory = false;
                 $nillable = false;
-                $a_XPaths['MinMaxNillable'] = [
+                $xPathMaster['MinMaxNillable'] = [
                     'Definition/Types/Schema/Element[class]/ComplexType/Sequeunce/Element[member]' => '//*[local-name()="definitions"]/*[local-name()="types"]/*[local-name()="schema"]/*[local-name()="element"][@name="'.$class.'"]/*[local-name()="complexType"]/*[local-name()="sequence"]/*[local-name()="element"][@name="'.$member.'"]',
                     'Definition/Types/Schema/ComplexType[class]/Sequeunce/Element[member]' => '//*[local-name()="definitions"]/*[local-name()="types"]/*[local-name()="schema"]/*[local-name()="complexType"][@name="'.$class.'"]/*[local-name()="sequence"]/*[local-name()="element"][@name="'.$member.'"]',
                     'Definition/Types/Schema/ComplexType[class]/Sequeunce/any' => '//*[local-name()="definitions"]/*[local-name()="types"]/*[local-name()="schema"]/*[local-name()="complexType"][@name="'.$class.'"]/*[local-name()="sequence"]/*[local-name()="any"]',
                 ];
-                foreach ($a_XPaths['MinMaxNillable'] as $s_PathType => $s_XPath) {
-                    $o_Path = $o_XPath->query($s_XPath, null, true);
-                    if ($o_Path->length > 0) {
-                        $o_Min = $o_XPath->query('@minOccurs', $o_Path->item(0));
-                        $o_Max = $o_XPath->query('@maxOccurs', $o_Path->item(0));
-                        $o_Nillable = $o_XPath->query('@nillable', $o_Path->item(0));
+                foreach ($xPathMaster['MinMaxNillable'] as $inheritenceType => $xPathRule) {
+                    $domPath = $xPath->query($xPathRule, null, true);
+                    if ($domPath->length > 0) {
+                        $minOccursDom = $xPath->query('@minOccurs', $domPath->item(0));
+                        $maxOccursDom = $xPath->query('@maxOccurs', $domPath->item(0));
+                        $nillableDom = $xPath->query('@nillable', $domPath->item(0));
 
-                        if ($o_Min->length > 0) {
-                            $min = $o_Min->item(0)->nodeValue;
+                        if ($minOccursDom->length > 0) {
+                            $min = $minOccursDom->item(0)->nodeValue;
                         } else {
                             $min = 0;
                         }
 
-                        if ($o_Max->length > 0) {
-                            $max = (string) $o_Max->item(0)->nodeValue;
+                        if ($maxOccursDom->length > 0) {
+                            $max = (string) $maxOccursDom->item(0)->nodeValue;
                         } else {
                             $max = '0';
                         }
 
-                        $nillable = ($o_Nillable->length > 0 && ('true' == strtolower(
-                                    $o_Nillable->item(0)->nodeValue
+                        $nillable = ($nillableDom->length > 0 && ('true' == strtolower(
+                                    $nillableDom->item(0)->nodeValue
                                 )));
 
                         $mandatory = ($min > 0);
 
                         switch ($max) {
                             case 'unbounded':
-                                $array = "[{$min}..]";
+                                $array = '[]';
+                                $arrayRange = "$min or more";
                                 break;
                             case '0':
                             case '1':
                                 $array = false;
+                                $arrayRange = false;
                                 break;
                             default:
-                                $array = "[{$min}..{$max}]";
+                                $array = '[]';
+                                $arrayRange = "Between $min and $max";
                                 break;
                         }
                         break;
@@ -471,24 +476,25 @@ foreach ($types as $type) {
                         'type' => $type,
                         'mandatory' => $mandatory,
                         'array' => $array,
+                        'arrayRange' => $arrayRange,
                         'nillable' => $nillable,
                     ];
                 }
             }
             break;
         default:
-            $a_Aliases[$class] = ['BaseType' => $s_BaseType];
-            $o_Path = $o_XPath->query(
+            $typeAliases[$class] = ['BaseType' => $baseType];
+            $domPath = $xPath->query(
                 '//*[local-name()="definitions"]/*[local-name()="types"]/*[local-name()="schema"]/*[local-name()="simpleType"][@name="'.$class.'"]/*[local-name()="restriction"]'
             );
-            if ($o_Path->length > 0) {
-                $o_Length = $o_XPath->query('*[local-name()="length"]/@value', $o_Path->item(0));
-                $o_Pattern = $o_XPath->query('*[local-name()="pattern"]/@value', $o_Path->item(0));
+            if ($domPath->length > 0) {
+                $o_Length = $xPath->query('*[local-name()="length"]/@value', $domPath->item(0));
+                $o_Pattern = $xPath->query('*[local-name()="pattern"]/@value', $domPath->item(0));
                 if ($o_Length->length > 0) {
-                    $a_Aliases[$class]['Length'] = $o_Length->item(0)->nodeValue;
+                    $typeAliases[$class]['Length'] = $o_Length->item(0)->nodeValue;
                 }
                 if ($o_Pattern->length > 0) {
-                    $a_Aliases[$class]['Pattern'] = $o_Pattern->item(0)->nodeValue;
+                    $typeAliases[$class]['Pattern'] = $o_Pattern->item(0)->nodeValue;
                 }
             }
     }
@@ -503,12 +509,18 @@ foreach ($types as $type) {
         'class' => $class,
         'members' => $members,
         'values' => $values,
-        'map' => $service['class'].'_'.preg_replace('`[ \.-]`', '_', $class).$s_ClassCase,
-        'ignorable' => $b_Ignorable && empty($values),
-        'case' => $b_Case,
-        'inherits' => $s_Inherits,
+        'map' => $service['class'].'_'.preg_replace('`[ \.-]`', '_', $class).$classCase,
+        'ignorable' => $ignorable && empty($values),
+        'case' => $cased,
+        'inherits' => $inherits,
     ];
 }
+
+// Additional types for docblocks only.
+$service['docblock'] = [
+    'ArrayOfZReadPayment'=>'SpaService_ArrayOfZReadPayment|SpaService_ZReadPayment[]',
+    'ArrayOfZReadSale'=>'SpaService_ArrayOfZReadSale|SpaService_ZReadSale[]',
+];
 
 echo 'Processing complete', PHP_EOL, 'Generating code', PHP_EOL;
 $code = '';
@@ -516,7 +528,7 @@ $code = '';
 foreach ($service['types'] as $s_Class => $type) {
     if (!$type['ignorable']) {
         echo " - class {$type['map']}";
-        $s_Inherits = (bool) $type['inherits'] ? " extends {$service['types'][$type['inherits']]['map']}" : '';
+        $inherits = (bool) $type['inherits'] ? " extends {$service['types'][$type['inherits']]['map']}" : '';
         if ($type['case']) {
             $code = '/**'.PHP_EOL.
                 ' * This class was originally named '.$s_Class.PHP_EOL.
@@ -526,7 +538,7 @@ foreach ($service['types'] as $s_Class => $type) {
         } else {
             $code = '';
         }
-        $code .= "class {$type['map']}{$s_Inherits}".PHP_EOL.
+        $code .= "class {$type['map']}{$inherits}".PHP_EOL.
             '{'.PHP_EOL;
 
         if (count($type['values']) > 0) {
@@ -538,42 +550,36 @@ foreach ($service['types'] as $s_Class => $type) {
                 ];
             }
             $i_Length = max(array_map('strlen', array_keys($a_Enums)));
-            $code .= PHP_EOL;
             foreach ($a_Enums as $s_Const => $a_Enum) {
                 $code .= '    /**'.PHP_EOL;
                 $code .= '     * @value '.$a_Enum['Value'].PHP_EOL;
                 $code .= '     */'.PHP_EOL;
-                $code .= '    const '.str_pad(
-                        generatePHPSymbol($s_Const),
-                        $i_Length,
-                        ' '
-                    )." = '{$a_Enum['Const']}';".PHP_EOL.PHP_EOL;
+                $code .= '    const '.generatePHPSymbol($s_Const)." = '{$a_Enum['Const']}';".PHP_EOL.PHP_EOL;
             }
         }
 
         if (count($type['members']) > 0) {
             // add member variables
             foreach ($type['members'] as $member) {
-                $code .= PHP_EOL.
-                    '    /**'.PHP_EOL;
+                $code .= '    /**'.PHP_EOL;
                 $s_ArrayMarker = false !== $member['array'] ? $member['array'] : '';
-                $s_NillableMarker = false !== $member['nillable'] ? '|Null' : '';
-                if (isset($a_Aliases[$member['type']])) {
-                    if (isset($service['types'][$member['type']]) && count(
-                            $service['types'][$member['type']]['values']
-                        ) > 0
-                    ) {
-                        $code .= "     * @var {$a_Aliases[$member['type']]['BaseType']}{$s_ArrayMarker}{$s_NillableMarker} \${$member['member']} One of the constants defined in {$service['types'][$member['type']]['map']}".PHP_EOL;
+                $s_NillableMarker = false !== $member['nillable'] ? '|null' : '';
+                if (isset($typeAliases[$member['type']])) {
+                    if (isset($service['types'][$member['type']]) && count($service['types'][$member['type']]['values']) > 0) {
+                        $code .= "     * @var {$typeAliases[$member['type']]['BaseType']}{$s_ArrayMarker}{$s_NillableMarker} \${$member['member']} One of the constants defined in {$service['types'][$member['type']]['map']}".PHP_EOL;
                     } else {
                         $code .= "     * @basetype {$member['type']}".PHP_EOL;
-                        if (isset($a_Aliases[$member['type']]['Length'])) {
-                            $code .= "     * @length   {$a_Aliases[$member['type']]['Length']}".PHP_EOL;
+                        if (isset($typeAliases[$member['type']]['Length'])) {
+                            $code .= "     * @length   {$typeAliases[$member['type']]['Length']}".PHP_EOL;
                         }
-                        if (isset($a_Aliases[$member['type']]['Pattern'])) {
-                            $code .= "     * @pattern  {$a_Aliases[$member['type']]['Pattern']}".PHP_EOL;
+                        if (isset($typeAliases[$member['type']]['Pattern'])) {
+                            $code .= "     * @pattern  {$typeAliases[$member['type']]['Pattern']}".PHP_EOL;
                         }
-                        $code .= "     * @var      {$a_Aliases[$member['type']]['BaseType']}{$s_ArrayMarker}{$s_NillableMarker} \${$member['member']}".PHP_EOL;
+                        $code .= "     *".PHP_EOL;
+                        $code .= "     * @var      {$typeAliases[$member['type']]['BaseType']}{$s_ArrayMarker}{$s_NillableMarker} \${$member['member']}".PHP_EOL;
                     }
+                } elseif (isset($service['docblock'][$member['type']])) {
+                    $code .= "     * @var {$service['docblock'][$member['type']]}{$s_ArrayMarker}{$s_NillableMarker} \${$member['member']}".PHP_EOL;
                 } elseif (isset($service['types'][$member['type']]['map'])) {
                     $code .= "     * @var {$service['types'][$member['type']]['map']}{$s_ArrayMarker}{$s_NillableMarker} \${$member['member']}".PHP_EOL;
                 } else {
@@ -582,16 +588,19 @@ foreach ($service['types'] as $s_Class => $type) {
                 if ($member['mandatory']) {
                     $code .= '     * @mandatory'.PHP_EOL;
                 }
+                if ($member['arrayRange']){
+                    $code .= "     * @range {$member['arrayRange']}".PHP_EOL;
+                }
                 $code .=
                     '     */'.PHP_EOL.
-                    "    public \${$member['member']};".PHP_EOL;
+                    "    public \${$member['member']};".PHP_EOL.PHP_EOL;
             }
         }
-        $code .= PHP_EOL.'}'.PHP_EOL;
+        $code = rtrim($code).PHP_EOL.'}'.PHP_EOL;
 
         $s_ClassFileName = 'Services/'.str_replace('_', '/', $type['map']).'.php';
 
-        if ((bool) ($s_CodeHeader = classHeader($s_Processed, $s_WSDL, md5($code), $s_ClassFileName))) {
+        if ((bool) ($s_CodeHeader = classHeader($s_Processed, $wsdl, md5($code), $s_ClassFileName))) {
             @mkdir(dirname($s_ClassFileName), 0755, true);
             file_put_contents($s_ClassFileName, '<?php'.PHP_EOL.PHP_EOL.$s_CodeHeader.$code);
             echo PHP_EOL;
@@ -611,7 +620,7 @@ echo 'Building service', PHP_EOL, " - {$service['class']}", PHP_EOL;
 $code = '';
 
 // class level docblock
-$code .= "/**\n";
+$code .= "\n/**\n";
 $code .= " * {$service['class']} class\n";
 $code .= " *\n";
 if ((bool) $service['doc']) {
@@ -620,33 +629,31 @@ if ((bool) $service['doc']) {
 }
 $code .= " * @author wsdl2php\n#READ_ONLY_PROPERTIES#";
 $code .= " */\n";
-$code .= "class {$service['class']} extends SoapClient\n{\n\n";
+$code .= "class {$service['class']} extends SoapClient\n{\n";
 
-/*
- * Add namespace and endpoint.
- */
-$code .= <<< END_NAMESPACE_ENDPOINT
-    /**
-     * Endpoint for service calls.
-     */
-    const SERVICE_ENDPOINT = '{$service['endpoint']}';
-
+///**
+// * Endpoint for service calls.
+// * NOTE: This is not used by this class and is for your in
+// */
+//const SERVICE_ENDPOINT = '{$service['endpoint']}';
+// Add namespace.
+$code .= <<< END_NAMESPACE
     /**
      * Namespace for service calls.
      */
     const SERVICE_NAMESPACE = '{$service['namespace']}';
 
 
-END_NAMESPACE_ENDPOINT;
+END_NAMESPACE;
 
 /**
  * Add classmap.
  */
 $i_Length = 2 + max(
         array_map(
-            function ($type) use ($a_ClassNameSubs) {
+            function ($type) use ($classNameSubstitutions) {
                 return strlen(
-                    isset($a_ClassNameSubs['Map'][$type['class']]) ? $a_ClassNameSubs['Map'][$type['class']] : $type['class']
+                    isset($classNameSubstitutions['Map'][$type['class']]) ? $classNameSubstitutions['Map'][$type['class']] : $type['class']
                 );
             },
             $service['types']
@@ -657,7 +664,7 @@ $s_ClassMapArray = implode(
     PHP_EOL,
     array_map(
         function ($a_Type) use ($i_Length) {
-            return '        '.str_pad("'{$a_Type['class']}'", $i_Length, ' ')." => '".$a_Type['map']."',";
+            return '        '."'{$a_Type['class']}'"." => '".$a_Type['map']."',";
         },
         $service['types']
     )
@@ -668,9 +675,9 @@ $code .= <<< END_CLASSMAP
      *
      * @var array
      */
-    private static \$a_ClassMap = array(
+    private static \$classMap = [
 {$s_ClassMapArray}
-    );
+    ];
 
 
 END_CLASSMAP;
@@ -678,9 +685,9 @@ END_CLASSMAP;
 /**
  * Build a store of protected properties for __get() and __isset().
  */
-$a_ProtectedProperties = [];
-$s_ProtectedProperties = '';
-$s_ReadOnlyProperties = '';
+$listOfProtectedProperties = [];
+$protectedPropertiesCases = '';
+$readOnlyProperties = '';
 
 /*
  * Add SOAP Headers.
@@ -720,7 +727,7 @@ if (!empty($service['headers_in'])) {
 
 
 END_SOAP_HEADER;
-        $a_ProtectedProperties[$s_SOAPHeader] = [
+        $listOfProtectedProperties[$s_SOAPHeader] = [
             'Property' => "o_{$s_SOAPHeader}",
             'Label' => 'SOAP Header sent with request',
         ];
@@ -752,7 +759,7 @@ if (!empty($service['headers_out'])) {
 
 
 END_SOAP_HEADER;
-        $a_ProtectedProperties[$s_SOAPHeader] = [
+        $listOfProtectedProperties[$s_SOAPHeader] = [
             'Property' => "o_{$s_SOAPHeader}",
             'Label' => 'SOAP Header received with response',
         ];
@@ -764,74 +771,70 @@ $code .= <<< 'END_PHP'
     /**
      * Service Constructor
      *
-     * @param string $s_WSDL    The location of the WSDL file.
-     * @param array  $a_Options Any additional parameters to add to the service.
+     * @param string $wsdl The location of the WSDL file.
+     * @param array $options Any additional parameters to add to the service.
      */
-    public function __construct($s_WSDL = Null, array $a_Options = array())
+    public function __construct(string $wsdl = null, array $options = [])
     {
-        /**
-         * Use the optional WSDL file location if it is supplied.
-         */
-        $s_WSDL = is_null($s_WSDL) ? #LOCALISED_WSDL# : $s_WSDL;
+        // Use the optional WSDL file location if it is supplied.
+        $wsdl = is_null($wsdl) ? #LOCALISED_WSDL# : $wsdl;
 
-        /**
-         * Add the classmap to the options.
-         */
-        foreach (self::$a_ClassMap as $s_ServiceClassName => $s_MappedClassName) {
-            if (!isset($a_Options['classmap'][$s_ServiceClassName])) {
-                $a_Options['classmap'][$s_ServiceClassName] = $s_MappedClassName;
+        // Add the classmap to the options.
+        foreach (self::$classMap as $serviceClassName => $mappedClassName) {
+            if (!isset($options['classmap'][$serviceClassName])) {
+                $options['classmap'][$serviceClassName] = $mappedClassName;
             }
         }
 
-        parent::__construct($s_WSDL, $a_Options);
+        parent::__construct($wsdl, $options);
     }
 
 
 END_PHP;
 
 // Build __get() and __isset() if there are any protected properties and build the strings for the header docblock.
-if (!empty($a_ProtectedProperties)) {
-    ksort($a_ProtectedProperties);
-    $s_ProtectedProperties = implode(
+if (!empty($listOfProtectedProperties)) {
+    ksort($listOfProtectedProperties);
+    $protectedPropertiesCases = implode(
         PHP_EOL,
         array_map(
-            function ($a_ProtectedProperty) {
-                return "            case '{$a_ProtectedProperty['Property']}' :";
+            function (array $protectedProperty) {
+                return "            case '{$protectedProperty['Property']}' :";
             },
-            $a_ProtectedProperties
+            $listOfProtectedProperties
         )
     );
-    $i_MaxLenType = max(
+    $maxLenType = max(
         array_map(
-            function ($a_ProtectedProperty) use ($service) {
-                return strlen($service['types'][substr($a_ProtectedProperty['Property'], 2)]['map']);
+            function (array $protectedProperty) use ($service) {
+                return strlen($service['types'][substr($protectedProperty['Property'], 2)]['map']);
             },
-            $a_ProtectedProperties
+            $listOfProtectedProperties
         )
     );
-    $i_MaxLenProperty = max(
+    $maxLenProperty = max(
         array_map(
-            function ($a_ProtectedProperty) {
-                return strlen($a_ProtectedProperty['Property']);
+            function (array $protectedProperty) {
+                return strlen($protectedProperty['Property']);
             },
-            $a_ProtectedProperties
+            $listOfProtectedProperties
         )
     );
-    $s_ReadOnlyProperties = implode(
+    $readOnlyProperties = implode(
             PHP_EOL,
             array_map(
-                function ($a_ProtectedProperty) use ($service, $i_MaxLenType, $i_MaxLenProperty) {
-                    $s_ProtectedPropertyName = substr($a_ProtectedProperty['Property'], 2);
+                function (array $protectedProperty) use ($service, $maxLenType, $maxLenProperty) {
+                    $protectedPropertyName = substr($protectedProperty['Property'], 2);
 
                     return ' * @property-read '.str_pad(
-                        $service['types'][$s_ProtectedPropertyName]['map'],
-                        $i_MaxLenType + 1
+                        $service['types'][$protectedPropertyName]['map'],
+                        $maxLenType + 1
                     ).'$'.str_pad(
-                        $a_ProtectedProperty['Property'],
-                        $i_MaxLenProperty
-                    )." {$a_ProtectedProperty['Label']}";
+                        $protectedProperty['Property'],
+                        $maxLenProperty
+                    )." {$protectedProperty['Label']}";
                 },
-                $a_ProtectedProperties
+                $listOfProtectedProperties
             )
         ).PHP_EOL;
 
@@ -839,37 +842,41 @@ if (!empty($a_ProtectedProperties)) {
     /**
      * Getter for protected properties.
      *
-     * @param string $s_Property
+     * @param string $property
+     *
+     * @return mixed
      */
-    public function __get($s_Property)
+    public function __get(string $property)
     {
-        switch ($s_Property) {
+        switch ($property) {
 #PROTECTED_PROPERTIES#
-                $m_Result = $this->$s_Property;
+                $result = $this->$property;
                 break;
             default :
-                $m_Result = parent::__get($s_Property);
+                $result = parent::__get($property);
         }
 
-        return $m_Result;
+        return $result;
     }
 
     /**
      * Isseter for protected properties.
      *
-     * @param string $s_Property
+     * @param string $property
+     *
+     * @return bool
      */
-    public function __isset($s_Property)
+    public function __isset(string $property): bool
     {
-        switch ($s_Property) {
+        switch ($property) {
 #PROTECTED_PROPERTIES#
-                $b_Result = isset($this->$s_Property);
+                $result = isset($this->$property);
                 break;
             default :
-                $m_Result = parent::__isset($s_Property);
+                $result = parent::__isset($property);
         }
 
-        return $b_Result;
+        return $result;
     }
 
 
@@ -881,90 +888,82 @@ $code .= <<< 'END_PHP'
     /**
      * Service call proxy.
      *
-     * @param string       $s_ServiceName    The name of the service being called.
-     * @param array        $a_Parameters     The parameters being supplied to the service.
-     * @param SOAPHeader[] $a_RequestHeaders An array of SOAPHeaders.
+     * @param string $serviceName The name of the service being called.
+     * @param array $parameters The parameters being supplied to the service.
+     * @param SOAPHeader[] $requestHeaders An array of SOAPHeaders.
+     *
      * @return mixed The service response.
      */
-    protected function callProxy($s_ServiceName, array $a_Parameters = Null, array $a_RequestHeaders = Null)
+    protected function callProxy(string $serviceName, array $parameters = null, array $requestHeaders = null)
     {
-        $m_Result = $this->__soapCall($s_ServiceName, $a_Parameters, array(
-            'uri'        => 'http://tempuri.org/',
-            'soapaction' => '',
-            ), (!empty($a_RequestHeaders) ? array_filter($a_RequestHeaders) : Null), $a_ResponseHeaders);
+        $result = $this->__soapCall(
+            $serviceName,
+            $parameters,
+            [
+                'uri' => 'http://tempuri.org/',
+                'soapaction' => '',
+            ],
+            !empty($requestHeaders) ? array_filter($requestHeaders) : null,
+            $responseHeaders
+        );
 
-        if (!empty($a_ResponseHeaders)){
-            foreach($a_ResponseHeaders as $s_HeaderName => $m_Data){
-                $s_PropertyName = "o_{$s_HeaderName}";
-                $this->$s_PropertyName = $m_Data;
+        if (!empty($responseHeaders)) {
+            foreach ($responseHeaders as $headerName => $headerData) {
+                $this->$headerName = $headerData;
             }
         }
 
-        return $m_Result;
+        return $result;
     }
 
     /**
      * Build and populate a SOAP header.
      *
-     * @param string       $s_HeaderName The name of the services SOAP Header.
-     * @param array|object $m_Data       Any data that can be mapped to the SOAP Header. Public properties of objects will be used if an object is supplied.
-     * @param string       $s_Namespace  The namespace which will default to this service's namespace.
-     * @return SoapHeader
+     * @param string $headerName The name of the services SOAP Header.
+     * @param array|object $rawHeaderData Any data that can be mapped to the SOAP Header. Public properties of objects will be used if an object is supplied.
+     * @param string $namespace The namespace which will default to this service's namespace.
+     *
+     * @throws ReflectionException
      */
-    public function assignSoapHeader($s_HeaderName, $m_Data = Null, $s_Namespace = self::SERVICE_NAMESPACE)
+    public function assignSoapHeader(string $headerName, $rawHeaderData = null, string $namespace = self::SERVICE_NAMESPACE)
     {
+        // Is there a corresponding property of this service for the requested SOAP Header?
+        // Is there a mapped class for this SOAP Header?
+        // Do we have any data to populate the SOAP Header with?
+        if (property_exists($this, $headerName) && isset(self::$classMap[$headerName]) && !empty($rawHeaderData)) {
+            // Start with no data for the SOAP Header.
+            $dataForSoapHeader = [];
+            $mappedData = [];
 
-        /**
-         * Is there a corresponding property of this service for the requested SOAP Header?
-         * Is there a mapped class for this SOAP Header?
-         * Do we have any data to populate the SOAP Header with?
-         */
-        $s_LocalPropertyName = "o_{$s_HeaderName}";
-        if (property_exists($this, $s_LocalPropertyName) && isset(self::$a_ClassMap[$s_HeaderName]) && !empty($m_Data)) {
+            // Get the mapped class and get the properties defined for the SOAP Header.
+            $reflectedHeader = new ReflectionClass(self::$classMap[$headerName]);
+            $reflectedHeaderProperties = $reflectedHeader->getProperties();
 
-            /**
-             * Start with no data for the SOAP Header.
-             */
-            $a_HeaderData = Null;
-
-            /**
-             * Get the mapped class and get the properties defined for the SOAP Header.
-             */
-            $o_HeaderClass      = new ReflectionClass(self::$a_ClassMap[$s_HeaderName]);
-            $a_HeaderProperties = $o_HeaderClass->getProperties();
-
-            /**
-             * Produce an array of public data from an object.
-             */
-            if (is_object($m_Data)) {
-                $o_DataClass      = new ReflectionClass($m_Data);
-                $a_DataProperties = $o_DataClass->getProperties(ReflectionProperty::IS_PUBLIC);
-                $a_Data           = array();
-                foreach ($a_DataProperties as $o_Property) {
-                    $s_PropertyName          = $o_Property->name;
-                    $a_Data[$s_PropertyName] = $m_Data->$s_PropertyName;
+            // Produce an array of public data from an object.
+            if (is_object($rawHeaderData)) {
+                $reflectedData = new ReflectionClass($rawHeaderData);
+                $reflectedDataProperties = $reflectedData->getProperties(ReflectionProperty::IS_PUBLIC);
+                $mappedData = [];
+                foreach ($reflectedDataProperties as $property) {
+                    $propertyName = $property->name;
+                    $mappedData[$propertyName] = $rawHeaderData->$propertyName;
                 }
-            }
-            else if (is_array($m_Data)) {
-                $a_Data = $m_Data;
+            } elseif (is_array($rawHeaderData)) {
+                $mappedData = $rawHeaderData;
             }
 
-            /**
-             * Process the data as an array.
-             */
-            if (is_array($a_Data)) {
-                foreach ($a_HeaderProperties as $o_Property) {
-                    $s_PropertyName = $o_Property->name;
-                    if (isset($a_Data[$s_PropertyName])) {
-                        $a_HeaderData[$s_PropertyName] = $a_Data[$s_PropertyName];
+            // Process the data as an array.
+            if (!empty($mappedData)) {
+                foreach ($reflectedHeaderProperties as $property) {
+                    $propertyName = $property->name;
+                    if (isset($mappedData[$propertyName])) {
+                        $dataForSoapHeader[$propertyName] = $mappedData[$propertyName];
                     }
                 }
             }
 
-            /**
-             * Build the SOAP Header and assign it the corresponding property.
-             */
-            $this->$s_LocalPropertyName = new SoapHeader($s_Namespace, $s_HeaderName, $a_HeaderData);
+            // Build the SOAP Header and assign it the corresponding property.
+            $this->$headerName = new SoapHeader($namespace, $headerName, $dataForSoapHeader);
         }
     }
 
@@ -972,12 +971,12 @@ $code .= <<< 'END_PHP'
 END_PHP;
 $code = str_replace(
     '#LOCALISED_WSDL#',
-    is_file($s_WSDL) ? "__DIR__ . '/{$service['class']}/{$service['class']}.wsdl'" : "'{$s_WSDL}'",
+    is_file($wsdl) ? "__DIR__ . '/{$service['class']}/{$service['class']}.wsdl'" : "'{$wsdl}'",
     $code
 );
-$code = str_replace('#READ_ONLY_PROPERTIES#', $s_ReadOnlyProperties, $code);
-if (!empty($s_ProtectedProperties)) {
-    $code = str_replace('#PROTECTED_PROPERTIES#', $s_ProtectedProperties, $code);
+$code = str_replace('#READ_ONLY_PROPERTIES#', $readOnlyProperties, $code);
+if (!empty($protectedPropertiesCases)) {
+    $code = str_replace('#PROTECTED_PROPERTIES#', $protectedPropertiesCases, $code);
 }
 
 echo 'Adding Methods', PHP_EOL;
@@ -1002,6 +1001,7 @@ foreach ($service['functions'] as $function) {
             $para[] = $param[1];
         }
     }
+    $code .= '     *'.PHP_EOL;
     $code .= "     * @return {$service['types'][$function['return']]['map']}".PHP_EOL;
 
     if (!empty($function['headers_in'])) {
@@ -1030,7 +1030,7 @@ foreach ($service['functions'] as $function) {
 
     $code .= "     */\n";
     $code .= "    public function {$function['name']}(".implode(', ', $signature).")\n    {\n";
-    $code .= "        return \$this->callProxy('{$function['method']}', array(";
+    $code .= "        return \$this->callProxy('{$function['method']}', [";
     $params = [];
     if (count($signature) > 0) { // add arguments
         foreach ($signature as $param) {
@@ -1042,12 +1042,12 @@ foreach ($service['functions'] as $function) {
         }
         $code .= implode(', ', $params);
     }
-    $code .= ')';
+    $code .= ']';
     if (!empty($function['headers_in'])) {
         if (!empty($function['headers_in'])) {
             $code .= ', array('.PHP_EOL;
             foreach ($function['headers_in'] as $s_Header) {
-                $code .= '                $this->o_'.$s_Header.','.PHP_EOL;
+                $code .= '                $this->'.$s_Header.','.PHP_EOL;
             }
             $code .= '        )';
         }
@@ -1055,11 +1055,11 @@ foreach ($service['functions'] as $function) {
 
     $code .= ");\n    }\n\n";
 }
-$code .= "}\n";
+$code = rtrim($code)."\n}\n";
 
 echo "Writing {$service['class']}.php";
 $s_ClassFileName = 'Services/'.str_replace('_', '/', $service['class']).'.php';
-if ((bool) ($s_CodeHeader = classHeader($s_Processed, $s_WSDL, md5($code), $s_ClassFileName))) {
+if ((bool) ($s_CodeHeader = classHeader($s_Processed, $wsdl, md5($code), $s_ClassFileName))) {
     @mkdir(dirname($s_ClassFileName), 0755, true);
     file_put_contents($s_ClassFileName, '<?php'.PHP_EOL.PHP_EOL.$s_CodeHeader.$code);
     echo PHP_EOL;
@@ -1089,7 +1089,6 @@ function classHeader($s_Processed, $s_WSDLURL, $s_MD5, $s_ClassFileName)
  * @Processed {$s_Processed}
  * @Hash      {$s_MD5}
  */
-
 
 END_DOCBLOCK;
 
